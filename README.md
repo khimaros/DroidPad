@@ -10,7 +10,7 @@
 
 
 
-## Create Customizable Control Interfaces for Bluetooth Low Energy, Bluetooth, WebSocket, MQTT, TCP, and UDP Protocols with Simple Drag-and-Drop Functionality. 
+## Create Customizable Control Interfaces for Bluetooth Low Energy, Bluetooth, WebSocket, MQTT, TCP, UDP, and MIDI Protocols with Simple Drag-and-Drop Functionality. 
 
 <img src="https://github.com/umer0586/DroidPad/blob/main/fastlane/metadata/android/en-US/images/phoneScreenshots/1.png" width="250" heigth="250"> <img src="https://github.com/umer0586/DroidPad/blob/main/fastlane/metadata/android/en-US/images/phoneScreenshots/3.png" width="250" heigth="250"> <img src="https://github.com/umer0586/DroidPad/blob/main/fastlane/metadata/android/en-US/images/phoneScreenshots/2.png" width="250" heigth="250"> <br>
 <img src="https://github.com/umer0586/DroidPad/blob/main/fastlane/metadata/android/en-US/images/phoneScreenshots/4.png" width="400" heigth="400"> <img src="https://github.com/umer0586/DroidPad/blob/main/fastlane/metadata/android/en-US/images/phoneScreenshots/5.png" width="400" heigth="400">
@@ -23,6 +23,8 @@
 
 2. **Multi-Protocol Support and Seamless Server Connections**  
 Easily configure your control pad to support network protocols such as **Bluetooth LE, WebSocket (Client/Server), MQTT, TCP, and UDP**. Once connected, you can interact with the control pad’s components—including **buttons, sliders, switches, joysticks, and D-PADs**—to send real-time commands directly to the connected server or BLE client, where these commands can be processed.
+
+   A control pad can also be attached to a **MIDI** device, in which case each component sends MIDI messages instead of JSON or CSV. See [MIDI](#midi).
 
 3. **Switch Connection Type Anytime**  
    You can change the connection type of a control pad at any time without creating a duplicate for a different connection.
@@ -62,7 +64,7 @@ Assign a unique **ID** to each component. This ID will be sent to the server dur
    <img src="https://github.com/user-attachments/assets/7bec11c8-3b00-4386-9990-13cfcc9576ef" width="240" height="426"/>
    
 ### **Step 3: Configure Connection Settings**  
-Tap **'Settings**, choose a connection type (TCP, Bluetooth LE, UDP, WebSocket, or MQTT), enter the server address and port. You can switch between connection types anytime
+Tap **'Settings**, choose a connection type (TCP, Bluetooth LE, UDP, WebSocket, MQTT, or MIDI), enter the server address and port. You can switch between connection types anytime
    
    <img src="https://github.com/user-attachments/assets/2105f61a-b3e8-42f7-ab8d-c266728efe0c" width="240" height="426" />
    <img src="https://github.com/user-attachments/assets/cbadcd5b-b8ba-4708-9347-fc2bb95497c2" width="240" height="426" />
@@ -307,6 +309,108 @@ For example:
 
 For **MQTT**, **WebSocket**, and **UDP** connections, you can send formatted JSON without the one-line and line feed restrictions, as these are message-based protocols. For **MQTT** you have to publish to `DroidPad/feed` topic
 
+
+## MIDI
+
+With the **MIDI** connection type a control pad drives a DAW, a synth or any
+other MIDI destination directly. Interactions are sent as MIDI 1.0 channel
+voice messages instead of JSON or CSV, so nothing has to translate them on the
+other side.
+
+### Attaching a device
+
+DroidPad lists every MIDI destination the phone exposes:
+
+- **Your computer**. Plug the phone in with a USB cable and set its USB mode to
+  **MIDI** (tap the *Charging this device via USB* notification, or
+  Settings -> Connected devices -> USB). The phone then shows up as a MIDI
+  input on the computer, and in DroidPad's own device list, usually named
+  `Android USB Peripheral Port`.
+- **A USB instrument**. Attach a synth, a sound module or another MIDI device
+  with an OTG cable and it appears under its own name.
+- **Another app** on the phone that publishes a virtual MIDI port, such as a
+  softsynth.
+
+Then tap **Settings**, choose the **MIDI** connection type, pick the device, and
+assign a message to each control.
+
+### Mapping controls
+
+Every control of the pad gets its own row in the mapping editor. Most
+components are a single row; a **DPAD** expands into four (one per direction)
+and a **JOYSTICK** into two (one per axis):
+
+| Component | Rows |
+|---|---|
+| BUTTON, SWITCH, SLIDER, STEP SLIDER, STEERING WHEEL, LED, GAUGE | `<id>` |
+| DPAD | `<id>.UP`, `<id>.DOWN`, `<id>.LEFT`, `<id>.RIGHT` |
+| JOYSTICK | `<id>.X`, `<id>.Y` |
+
+A fresh MIDI config is filled in for you: continuous controls get consecutive
+controller numbers starting at CC 1, and on/off ones consecutive notes starting
+at note 36. A control added later takes the lowest number nothing else is
+using. **Reset Mappings** returns to the plain consecutive layout.
+
+The table is stored with the connection, so a control added in the builder has
+no mapping until you open **Settings** and save. Until then it sends nothing.
+
+Each row picks a message type, a channel (1-16) and a number (0-127):
+
+| Message | On/off control (BUTTON, SWITCH, DPAD) | Continuous control (SLIDER, STEERING WHEEL, JOYSTICK) |
+|---|---|---|
+| `NONE` | nothing is sent | nothing is sent |
+| `NOTE` | note on at velocity 127 when pressed, note off when released | note on whose velocity follows the control |
+| `CONTROL_CHANGE` | value 127 when pressed, 0 when released | value follows the control |
+| `PROGRAM_CHANGE` | the configured program when pressed, nothing on release | the program number follows the control |
+| `PITCH_BEND` | full bend when pressed, center when released | bend follows the control |
+
+A tap on a button or a DPAD direction (**CLICK**) sends the pressed message
+immediately followed by the released one.
+
+### How values are scaled
+
+Continuous controls are scaled from their own range onto the full MIDI range,
+0-127 for notes, controllers and programs, 0-16383 for pitch bend:
+
+- a **SLIDER** or **STEP SLIDER** uses the minimum and maximum you configured on it
+- a **STEERING WHEEL** uses `-maxAngle` to `+maxAngle`, so a centered wheel sits at the middle
+- a **JOYSTICK** axis uses -1.0 to 1.0, so a centered stick sits at the middle
+
+Values outside the range are clamped.
+
+### Updating the control pad from MIDI
+
+MIDI runs both ways. Whatever number drives a control outward is the number
+that drives it inward, so the same mapping table is used in reverse. The
+components a script can update over the other connection types -- **SWITCH**,
+**SLIDER**, **LED** and **GAUGE** -- can also be driven by sending MIDI to
+DroidPad:
+
+| Component | What an incoming message does |
+|---|---|
+| `GAUGE`, `SLIDER` | the value is scaled into the range configured on the item |
+| `SWITCH` | a note on, or a value of 64 or more, switches it on; a note off, or a value below 64, switches it off |
+| `LED` | the value picks a state: 0-42 **OFF**, 43-84 **ON**, 85-127 **BLINK** |
+
+A note on at velocity zero counts as a note off, and a pitch bend spans the
+same range over its 14 bits.
+
+To blink the LED mapped to CC 5 on channel 1, send it 127:
+
+```shell
+amidi -p hw:1,0,0 -S "B0 05 7F"
+```
+
+`e2e/drive_midi_feedback.py` does the same continuously, ramping a gauge and
+cycling an LED, which is a quick way to confirm a mapping end to end.
+
+### Notes
+
+- Buttons, DPADs, joysticks and steering wheels are send only, matching what a
+  script can already update over the other connection types.
+- Attached sensors have no MIDI representation and are not sent.
+- Sharing a control pad by QR code or JSON file carries the mappings but not
+  the selected device, since device names are specific to a phone.
 
 ## Important Note for Bluetooth and Bluetooth Low Energy  
 A long Bluetooth device name can cause advertisement failure (In case of BLE). To avoid this issue, use a shorter name. In your device's Bluetooth settings, change the Bluetooth device name to five or fewer characters, such as `dev`.

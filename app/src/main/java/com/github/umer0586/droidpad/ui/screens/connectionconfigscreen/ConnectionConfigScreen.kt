@@ -81,6 +81,7 @@ import com.github.umer0586.droidpad.data.connectionconfig.RemoteBluetoothDevice
 import com.github.umer0586.droidpad.data.connectionconfig.UUID_SSP
 import com.github.umer0586.droidpad.data.database.entities.ConnectionType
 import com.github.umer0586.droidpad.ui.components.EnumDropdown
+import com.github.umer0586.droidpad.ui.components.MidiMappingEditor
 import com.github.umer0586.droidpad.ui.theme.DroidPadTheme
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.rememberMultiplePermissionsState
@@ -513,6 +514,135 @@ fun ConnectionConfigScreenContent(
                             }
                         }
                     }
+                }
+            }
+
+            if(uiState.connectionType == ConnectionType.MIDI){
+
+                if(!uiState.isMidiSupported){
+                    ListItem(
+                        modifier = Modifier
+                            .width(itemWidth)
+                            .padding(horizontal = itemPadding),
+                        headlineContent = { Text("MIDI Not Supported") },
+                        supportingContent = { Text("This device has no MIDI support") },
+                        leadingContent = {
+                            Icon(
+                                imageVector = Icons.Filled.Warning,
+                                contentDescription = "WarningIcon"
+                            )
+                        }
+                    )
+                }
+
+                var showMidiDevices by remember { mutableStateOf(false) }
+                val selectedMidiDevice = uiState.midiDevices.find { it.name == uiState.selectedMidiDevice }
+
+                ListItem(
+                    modifier = Modifier
+                        .width(itemWidth)
+                        .padding(horizontal = itemPadding),
+                    headlineContent = { Text(uiState.selectedMidiDevice.ifEmpty { "No Device Selected" }) },
+                    supportingContent = {
+                        selectedMidiDevice?.also { Text("${it.transport} : ${it.inputPortCount} port(s)") }
+                    },
+                    trailingContent = {
+                        IconButton(
+                            onClick = {
+                                // devices come and go with the cable, so the list
+                                // is re-read every time it is opened
+                                onUiEvent(ConnectionConfigScreenEvent.OnMidiDevicesRefresh)
+                                showMidiDevices = true
+                            }
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.MoreVert,
+                                contentDescription = "Select Device"
+                            )
+                        }
+                    }
+                )
+
+                if(showMidiDevices){
+                    ModalBottomSheet(
+                        onDismissRequest = { showMidiDevices = false },
+                    ) {
+                        if(uiState.midiDevices.isEmpty()){
+                            ListItem(
+                                modifier = Modifier.padding(10.dp),
+                                headlineContent = { Text("No MIDI Devices Found") },
+                                supportingContent = { Text("Attach a MIDI device, or set this phone's USB mode to MIDI") }
+                            )
+                        }
+
+                        LazyColumn(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(10.dp)
+                        ) {
+
+                            items(uiState.midiDevices.size) { index ->
+                                val midiDevice = uiState.midiDevices[index]
+                                ListItem(
+                                    modifier = Modifier.clickable {
+                                        onUiEvent(ConnectionConfigScreenEvent.OnMidiDeviceSelected(midiDevice.name))
+                                        showMidiDevices = false
+                                    },
+                                    headlineContent = { Text(midiDevice.name) },
+                                    supportingContent = { Text("${midiDevice.transport} : ${midiDevice.inputPortCount} port(s)") },
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // single port devices leave nothing to choose
+                if((selectedMidiDevice?.inputPortCount ?: 0) > 1){
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        Text("Port")
+                        NumberPicker(
+                            value = uiState.midiPortIndex,
+                            onValueChange = {
+                                onUiEvent(ConnectionConfigScreenEvent.OnMidiPortIndexChange(it))
+                            },
+                            dividersColor = MaterialTheme.colorScheme.primary,
+                            range = 0..(selectedMidiDevice!!.inputPortCount - 1),
+                            textStyle = TextStyle(
+                                color = MaterialTheme.colorScheme.secondary
+                            )
+                        )
+                    }
+                }
+
+                if(uiState.midiTargets.isEmpty()){
+                    ListItem(
+                        modifier = Modifier
+                            .width(itemWidth)
+                            .padding(horizontal = itemPadding),
+                        headlineContent = { Text("Nothing To Map") },
+                        supportingContent = { Text("Add controls to this pad in the builder screen") }
+                    )
+                } else {
+                    uiState.midiTargets.forEach { target ->
+                        uiState.midiMappings.find { it.target == target.key }?.also { mapping ->
+                            MidiMappingEditor(
+                                modifier = Modifier
+                                    .width(itemWidth)
+                                    .padding(horizontal = itemPadding),
+                                target = target,
+                                mapping = mapping,
+                                onMappingChange = {
+                                    onUiEvent(ConnectionConfigScreenEvent.OnMidiMappingChange(it))
+                                }
+                            )
+                        }
+                    }
+
+                    TextButton(
+                        onClick = { onUiEvent(ConnectionConfigScreenEvent.OnMidiMappingsReset) }
+                    ) { Text("Reset Mappings") }
                 }
             }
 

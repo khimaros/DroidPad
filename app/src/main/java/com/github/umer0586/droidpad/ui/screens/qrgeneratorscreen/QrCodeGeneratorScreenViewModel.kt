@@ -27,6 +27,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.github.umer0586.droidpad.data.ExternalData
 import com.github.umer0586.droidpad.data.connectionconfig.BluetoothConfig
+import com.github.umer0586.droidpad.data.connectionconfig.MidiConfig
 import com.github.umer0586.droidpad.data.connectionconfig.MqttConfig
 import com.github.umer0586.droidpad.data.database.entities.ConnectionType
 import com.github.umer0586.droidpad.data.database.entities.ControlPad
@@ -105,6 +106,12 @@ class QrCodeScreenViewModel @Inject constructor(
                     else if(it.connectionType == ConnectionType.BLUETOOTH){
                         val bluetoothConfig = BluetoothConfig.fromJson(it.configJson)
                         val updatedConfigJson = bluetoothConfig.copy(remoteDevice = null).toJson()
+                        return@let it.copy(configJson = updatedConfigJson)
+                    }
+                    // the mappings travel, the device they were pointed at does not
+                    else if(it.connectionType == ConnectionType.MIDI){
+                        val midiConfig = MidiConfig.fromJson(it.configJson)
+                        val updatedConfigJson = midiConfig.copy(deviceName = "", portIndex = 0).toJson()
                         return@let it.copy(configJson = updatedConfigJson)
                     }
                     return@let it

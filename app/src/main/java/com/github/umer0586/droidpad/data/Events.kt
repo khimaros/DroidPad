@@ -12,17 +12,28 @@ private val JsonCon = Json {
     encodeDefaults = true
 }
 
+// states reported by momentary controls (BUTTON and DPAD)
+const val PRESS_STATE = "PRESS"
+const val RELEASE_STATE = "RELEASE"
+const val CLICK_STATE = "CLICK"
+
+// an interaction travelling from the control pad towards the connection
+sealed interface ControlPadEvent {
+    val id: String
+    fun toJson(): String
+    fun toCsv(): String
+}
 
 @Serializable
 data class SliderEvent(
-    val id: String,
+    override val id: String,
     val type: ItemType = ItemType.SLIDER,
     val value: Float
-){
-    fun toJson(): String {
+): ControlPadEvent {
+    override fun toJson(): String {
         return JsonCon.encodeToString(this)
     }
-    fun toCSV() = "$id,SLIDER,$value"
+    override fun toCsv() = "$id,SLIDER,$value"
 
     companion object {
         fun fromJson(json: String): SliderEvent {
@@ -33,14 +44,14 @@ data class SliderEvent(
 
 @Serializable
 data class SwitchEvent(
-    val id: String,
+    override val id: String,
     val type: ItemType = ItemType.SWITCH,
     val state: Boolean
-){
-    fun toJson(): String {
+): ControlPadEvent {
+    override fun toJson(): String {
         return JsonCon.encodeToString(this)
     }
-    fun toCSV() = "$id,SWITCH,$state"
+    override fun toCsv() = "$id,SWITCH,$state"
 
     companion object {
         fun fromJson(json: String): SwitchEvent {
@@ -51,52 +62,52 @@ data class SwitchEvent(
 
 @Serializable
 data class ButtonEvent(
-    val id: String,
+    override val id: String,
     val type: ItemType = ItemType.BUTTON,
     val state: String
-){
-    fun toJson(): String {
+): ControlPadEvent {
+    override fun toJson(): String {
         return JsonCon.encodeToString(this)
     }
-    fun toCSV() = "$id,BUTTON,$state"
+    override fun toCsv() = "$id,BUTTON,$state"
 }
 
 @Serializable
 data class DPadEvent(
-    val id: String,
+    override val id: String,
     val type: ItemType = ItemType.DPAD,
     val button: DPAD_BUTTON,
     val state: String
-){
-    fun toJson(): String {
+): ControlPadEvent {
+    override fun toJson(): String {
         return JsonCon.encodeToString(this)
     }
-    fun toCSV() = "$id,DPAD,$button,$state"
+    override fun toCsv() = "$id,DPAD,$button,$state"
 }
 
 @Serializable
 data class JoyStickEvent(
-    val id: String,
+    override val id: String,
     val type: ItemType = ItemType.JOYSTICK,
     val x: Float,
     val y: Float
-){
-    fun toJson(): String {
+): ControlPadEvent {
+    override fun toJson(): String {
         return JsonCon.encodeToString(this)
     }
-    fun toCSV() = "$id,JOYSTICK,$x,$y"
+    override fun toCsv() = "$id,JOYSTICK,$x,$y"
 }
 
 @Serializable
 data class SteeringWheelEvent(
-    val id: String,
+    override val id: String,
     val type: ItemType = ItemType.STEERING_WHEEL,
     val angle: Float
-){
-    fun toJson(): String {
+): ControlPadEvent {
+    override fun toJson(): String {
         return JsonCon.encodeToString(this)
     }
-    fun toCSV() = "$id,STEERING_WHEEL,$angle"
+    override fun toCsv() = "$id,STEERING_WHEEL,$angle"
 }
 
 @Serializable
@@ -105,6 +116,10 @@ data class LedEvent(
     val type: ItemType = ItemType.LED,
     val state: LEDSTATE
 ){
+    fun toJson(): String {
+        return JsonCon.encodeToString(this)
+    }
+
     companion object {
         fun fromJson(json: String): LedEvent {
             return JsonCon.decodeFromString(json)
@@ -131,6 +146,10 @@ data class GaugeEvent(
     val type: ItemType = ItemType.GAUGE,
     val value: Float
 ){
+    fun toJson(): String {
+        return JsonCon.encodeToString(this)
+    }
+
     companion object {
         fun fromJson(json: String): GaugeEvent {
             return JsonCon.decodeFromString(json)

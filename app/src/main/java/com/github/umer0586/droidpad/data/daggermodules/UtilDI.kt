@@ -7,6 +7,8 @@ import com.github.umer0586.droidpad.data.sensor.SensorManagerUtil
 import com.github.umer0586.droidpad.data.sensor.SensorManagerUtilImp
 import com.github.umer0586.droidpad.data.util.bluetooth.BluetoothUtil
 import com.github.umer0586.droidpad.data.util.bluetooth.BluetoothUtilImp
+import com.github.umer0586.droidpad.data.util.midi.MidiUtil
+import com.github.umer0586.droidpad.data.util.midi.MidiUtilImp
 import com.github.umer0586.droidpad.data.util.vibrator.VibratorUtil
 import com.github.umer0586.droidpad.data.util.vibrator.VibratorUtilImp
 import dagger.Module
@@ -25,6 +27,12 @@ object UtilDI {
     @ViewModelScoped
     fun provideBluetoothUtil(@ApplicationContext appContext: Context): BluetoothUtil {
         return BluetoothUtilImp(appContext)
+    }
+
+    @Provides
+    @ViewModelScoped
+    fun provideMidiUtil(@ApplicationContext appContext: Context): MidiUtil {
+        return MidiUtilImp(appContext)
     }
 
     @Provides

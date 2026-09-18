@@ -22,6 +22,7 @@ package com.github.umer0586.droidpad.data.daggermodules
 import android.content.Context
 import com.github.umer0586.droidpad.data.connection.ConnectionFactory
 import com.github.umer0586.droidpad.data.connection.ConnectionFactoryImpl
+import com.github.umer0586.droidpad.data.util.midi.MidiUtil
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -35,7 +36,7 @@ object ConnectionFactoryDI {
 
     @Provides
     @ViewModelScoped
-    fun provideConnectionFactory(@ApplicationContext appContext: Context) : ConnectionFactory {
-        return ConnectionFactoryImpl(appContext)
+    fun provideConnectionFactory(@ApplicationContext appContext: Context, midiUtil: MidiUtil) : ConnectionFactory {
+        return ConnectionFactoryImpl(appContext, midiUtil)
     }
 }

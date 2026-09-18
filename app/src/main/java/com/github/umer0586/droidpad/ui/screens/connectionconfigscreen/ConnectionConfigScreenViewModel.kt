@@ -24,6 +24,12 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.github.umer0586.droidpad.data.connectionconfig.BluetoothConfig
 import com.github.umer0586.droidpad.data.connectionconfig.BluetoothLEConfig
+import com.github.umer0586.droidpad.data.connectionconfig.MIDI_MAX_CHANNEL
+import com.github.umer0586.droidpad.data.connectionconfig.MIDI_MAX_DATA
+import com.github.umer0586.droidpad.data.connectionconfig.MIDI_MIN_CHANNEL
+import com.github.umer0586.droidpad.data.connectionconfig.MIDI_MIN_DATA
+import com.github.umer0586.droidpad.data.connectionconfig.MidiConfig
+import com.github.umer0586.droidpad.data.connectionconfig.MidiMapping
 import com.github.umer0586.droidpad.data.connectionconfig.MqttConfig
 import com.github.umer0586.droidpad.data.connectionconfig.RemoteBluetoothDevice
 import com.github.umer0586.droidpad.data.connectionconfig.TCPConfig
@@ -33,7 +39,13 @@ import com.github.umer0586.droidpad.data.connectionconfig.WebsocketConfig
 import com.github.umer0586.droidpad.data.connectionconfig.WebsocketServerConfig
 import com.github.umer0586.droidpad.data.database.entities.ConnectionType
 import com.github.umer0586.droidpad.data.repositories.ConnectionConfigRepository
+import com.github.umer0586.droidpad.data.repositories.ControlPadRepository
 import com.github.umer0586.droidpad.data.util.bluetooth.BluetoothUtil
+import com.github.umer0586.droidpad.data.util.midi.MidiDeviceDescriptor
+import com.github.umer0586.droidpad.data.util.midi.MidiTarget
+import com.github.umer0586.droidpad.data.util.midi.MidiUtil
+import com.github.umer0586.droidpad.data.util.midi.midiMappingsFor
+import com.github.umer0586.droidpad.data.util.midi.midiTargetsOf
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -63,7 +75,14 @@ data class ConnectionConfigScreenState(
     val selectedBluetoothDevice: RemoteBluetoothDevice? = null,
     val hasBluetoothPermission: Boolean = false,
     val pairedBluetoothDevices: List<RemoteBluetoothDevice> = emptyList(),
-    val listenOnAllInterfaces: Boolean = false
+    val listenOnAllInterfaces: Boolean = false,
+    val isMidiSupported: Boolean = true,
+    val midiDevices: List<MidiDeviceDescriptor> = emptyList(),
+    val selectedMidiDevice: String = "",
+    val midiPortIndex: Int = 0,
+    val midiTargets: List<MidiTarget> = emptyList(),
+    // holds one mapping per entry of midiTargets, keyed by the target
+    val midiMappings: List<MidiMapping> = emptyList()
 )
 
 sealed interface ConnectionConfigScreenEvent {
@@ -85,6 +104,11 @@ sealed interface ConnectionConfigScreenEvent {
     data class OnBluetoothUUIDChange(val uuid: String) : ConnectionConfigScreenEvent
     data class OnBluetoothDeviceSelected(val remoteBluetoothDevice: RemoteBluetoothDevice) : ConnectionConfigScreenEvent
     data class OnListenOnAllInterfacesChange(val listenOnAllInterfaces: Boolean) : ConnectionConfigScreenEvent
+    data class OnMidiDeviceSelected(val deviceName: String) : ConnectionConfigScreenEvent
+    data class OnMidiPortIndexChange(val portIndex: Int) : ConnectionConfigScreenEvent
+    data class OnMidiMappingChange(val mapping: MidiMapping) : ConnectionConfigScreenEvent
+    data object OnMidiDevicesRefresh : ConnectionConfigScreenEvent
+    data object OnMidiMappingsReset : ConnectionConfigScreenEvent
     data object OnBluetoothPermissionStateChange : ConnectionConfigScreenEvent
     data object OnSelectDeviceClick : ConnectionConfigScreenEvent
     data object OnBackPress : ConnectionConfigScreenEvent
@@ -94,7 +118,9 @@ sealed interface ConnectionConfigScreenEvent {
 @HiltViewModel
 class ConnectionConfigScreenViewModel @Inject constructor(
     private val connectionConfigRepository: ConnectionConfigRepository,
-    private val bluetoothUtil: BluetoothUtil
+    private val controlPadRepository: ControlPadRepository,
+    private val bluetoothUtil: BluetoothUtil,
+    private val midiUtil: MidiUtil
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(ConnectionConfigScreenState())
@@ -143,6 +169,10 @@ class ConnectionConfigScreenViewModel @Inject constructor(
 
                         )
                     }
+                } else if (uiState.connectionType == ConnectionType.MIDI) {
+                    _uiState.update {
+                        it.copy(hasInputError = !uiState.isMidiSupported || uiState.selectedMidiDevice.isEmpty())
+                    }
                 }
             }
         }
@@ -156,6 +186,23 @@ class ConnectionConfigScreenViewModel @Inject constructor(
 
     fun loadConnectionConfigFor(controlPadId: Long) {
         viewModelScope.launch {
+
+            // the mapping editor lists every control of the pad, so the targets
+            // have to be known before a MIDI config can be shown or saved
+            val midiTargets = controlPadRepository.getControlPadById(controlPadId)
+                ?.let { controlPadRepository.getControlPadItemsOf(it) }
+                .orEmpty()
+                .flatMap(::midiTargetsOf)
+
+            _uiState.update {
+                it.copy(
+                    isMidiSupported = midiUtil.isMidiSupported,
+                    midiDevices = midiUtil.availableDevices(),
+                    midiTargets = midiTargets,
+                    midiMappings = midiMappingsFor(midiTargets)
+                )
+            }
+
             connectionConfigRepository.getConfigForControlPad(controlPadId)
                 ?.also { config ->
                     when (config.connectionType) {
@@ -268,6 +315,18 @@ class ConnectionConfigScreenViewModel @Inject constructor(
                                 )
                             }
                         }
+
+                        ConnectionType.MIDI -> {
+                            val midiConfig = MidiConfig.fromJson(config.configJson)
+                            _uiState.update {
+                                it.copy(
+                                    connectionType = config.connectionType,
+                                    selectedMidiDevice = midiConfig.deviceName,
+                                    midiPortIndex = midiConfig.portIndex,
+                                    midiMappings = midiMappingsFor(it.midiTargets, midiConfig.mappings)
+                                )
+                            }
+                        }
                     }
 
 
@@ -375,8 +434,45 @@ class ConnectionConfigScreenViewModel @Inject constructor(
             is ConnectionConfigScreenEvent.OnListenOnAllInterfacesChange -> {
                 _uiState.update { it.copy(listenOnAllInterfaces = event.listenOnAllInterfaces) }
             }
+
+            is ConnectionConfigScreenEvent.OnMidiDeviceSelected -> {
+                // port numbering is per device, so a previous choice cannot carry over
+                _uiState.update { it.copy(selectedMidiDevice = event.deviceName, midiPortIndex = 0) }
+            }
+
+            is ConnectionConfigScreenEvent.OnMidiPortIndexChange -> {
+                _uiState.update { it.copy(midiPortIndex = event.portIndex) }
+            }
+
+            is ConnectionConfigScreenEvent.OnMidiDevicesRefresh -> {
+                _uiState.update {
+                    it.copy(
+                        isMidiSupported = midiUtil.isMidiSupported,
+                        midiDevices = midiUtil.availableDevices()
+                    )
+                }
+            }
+
+            is ConnectionConfigScreenEvent.OnMidiMappingChange -> {
+                _uiState.update { uiState ->
+                    uiState.copy(
+                        midiMappings = uiState.midiMappings.map { mapping ->
+                            if (mapping.target == event.mapping.target) event.mapping.sanitized() else mapping
+                        }
+                    )
+                }
+            }
+
+            is ConnectionConfigScreenEvent.OnMidiMappingsReset -> {
+                _uiState.update { it.copy(midiMappings = midiMappingsFor(it.midiTargets)) }
+            }
         }
     }
+
+    private fun MidiMapping.sanitized() = copy(
+        channel = channel.coerceIn(MIDI_MIN_CHANNEL, MIDI_MAX_CHANNEL),
+        number = number.coerceIn(MIDI_MIN_DATA, MIDI_MAX_DATA)
+    )
 
 
     private fun saveConfig(controlPadId: Long) {
@@ -453,6 +549,14 @@ class ConnectionConfigScreenViewModel @Inject constructor(
                 BluetoothConfig(
                     serviceUUID = uiState.value.bluetoothServiceUUID,
                     remoteDevice = uiState.value.selectedBluetoothDevice
+                ).toJson()
+            }
+
+            ConnectionType.MIDI -> {
+                MidiConfig(
+                    deviceName = uiState.value.selectedMidiDevice,
+                    portIndex = uiState.value.midiPortIndex,
+                    mappings = uiState.value.midiMappings
                 ).toJson()
             }
         }

@@ -22,6 +22,7 @@ package com.github.umer0586.droidpad.data.connection
 import android.content.Context
 import com.github.umer0586.droidpad.data.connectionconfig.BluetoothConfig
 import com.github.umer0586.droidpad.data.connectionconfig.BluetoothLEConfig
+import com.github.umer0586.droidpad.data.connectionconfig.MidiConfig
 import com.github.umer0586.droidpad.data.connectionconfig.MqttConfig
 import com.github.umer0586.droidpad.data.connectionconfig.TCPConfig
 import com.github.umer0586.droidpad.data.connectionconfig.UDPConfig
@@ -29,6 +30,7 @@ import com.github.umer0586.droidpad.data.connectionconfig.WebsocketConfig
 import com.github.umer0586.droidpad.data.connectionconfig.WebsocketServerConfig
 import com.github.umer0586.droidpad.data.database.entities.ConnectionConfig
 import com.github.umer0586.droidpad.data.database.entities.ConnectionType
+import com.github.umer0586.droidpad.data.util.midi.MidiUtil
 import kotlinx.coroutines.CoroutineScope
 
 
@@ -36,7 +38,10 @@ interface ConnectionFactory {
     fun getConnection(connectionConfig: ConnectionConfig, scope : CoroutineScope) : Connection
 }
 
-class ConnectionFactoryImpl(private val appContext: Context) : ConnectionFactory {
+class ConnectionFactoryImpl(
+    private val appContext: Context,
+    private val midiUtil: MidiUtil
+) : ConnectionFactory {
 
     override fun getConnection(connectionConfig: ConnectionConfig, scope : CoroutineScope) =
         when(connectionConfig.connectionType) {
@@ -48,6 +53,7 @@ class ConnectionFactoryImpl(private val appContext: Context) : ConnectionFactory
             ConnectionType.MQTT_V3 -> Mqttv3Connection(MqttConfig.fromJson(connectionConfig.configJson))
             ConnectionType.BLUETOOTH_LE -> BluetoothLEConnection(context = appContext , config = BluetoothLEConfig.fromJson(connectionConfig.configJson))
             ConnectionType.BLUETOOTH -> BluetoothConnection(context = appContext , bluetoothConfig = BluetoothConfig.fromJson(connectionConfig.configJson))
+            ConnectionType.MIDI -> MidiConnection(midiUtil = midiUtil, midiConfig = MidiConfig.fromJson(connectionConfig.configJson))
         }
 
 }

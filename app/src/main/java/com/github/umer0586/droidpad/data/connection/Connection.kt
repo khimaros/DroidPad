@@ -38,7 +38,10 @@ enum class ConnectionState{
     BLUETOOTH_ADVERTISING,BLUETOOTH_CLIENT_CONNECTED,BLUETOOTH_CLIENT_DISCONNECTED,
     BLUETOOTH_ADVERTISEMENT_FAILED, BLUETOOTH_ADVERTISEMENT_SUCCESS,BLUETOOTH_ADVERTISEMENT_NOT_SUPPORTED,
     BLUETOOTH_ADVERTISER_NOT_FOUND, BLUETOOTH_GATT_SERVER_CLOSED, BLUETOOTH_DATA_SENT_ERROR, BLUETOOTH_GATT_SERVER_OPENED,
-    BLUETOOTH_PERMISSION_REQUIRED, BLUETOOTH_CONNECTING, BLUETOOTH_CONNECTED, BLUETOOTH_DISCONNECTED ,BLUETOOTH_NO_DEVICE_SPECIFIED, BLUETOOTH_INVALID_DEVICE, BLUETOOTH_CONNECTION_FAILED
+    BLUETOOTH_PERMISSION_REQUIRED, BLUETOOTH_CONNECTING, BLUETOOTH_CONNECTED, BLUETOOTH_DISCONNECTED ,BLUETOOTH_NO_DEVICE_SPECIFIED, BLUETOOTH_INVALID_DEVICE, BLUETOOTH_CONNECTION_FAILED,
+
+    MIDI_CONNECTING,MIDI_CONNECTED,MIDI_DISCONNECTED,MIDI_DEVICE_NOT_FOUND,
+    MIDI_NOT_SUPPORTED,MIDI_CONNECTION_FAILED,MIDI_SEND_FAILED
 
 }
 
@@ -49,16 +52,27 @@ abstract class Connection {
     private val _receivedData = MutableSharedFlow<String>()
     val receivedData = _receivedData.asSharedFlow()
 
+    // whole messages from a byte oriented protocol, framed by the connection
+    private val _receivedBytes = MutableSharedFlow<ByteArray>()
+    val receivedBytes = _receivedBytes.asSharedFlow()
+
     protected fun notifyConnectionState(newState: ConnectionState) {
         _connectionState.value = newState
     }
     protected suspend fun notifyReceivedData(data: String) {
         _receivedData.emit(data)
     }
+    protected suspend fun notifyReceivedBytes(data: ByteArray) {
+        _receivedBytes.emit(data)
+    }
 
     abstract val connectionType: ConnectionType
     abstract suspend fun setup()
     abstract suspend fun sendData(data: String)
     abstract suspend fun tearDown()
+
+    // binary payloads, overridden by connections which speak a byte oriented
+    // protocol such as MIDI
+    open suspend fun sendData(data: ByteArray) = sendData(data.decodeToString())
 
 }

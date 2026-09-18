@@ -28,12 +28,16 @@ import androidx.compose.ui.graphics.Color
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.github.umer0586.droidpad.data.ButtonEvent
+import com.github.umer0586.droidpad.data.CLICK_STATE
+import com.github.umer0586.droidpad.data.ControlPadEvent
 import com.github.umer0586.droidpad.data.DPadEvent
 import com.github.umer0586.droidpad.data.GaugeEvent
 import com.github.umer0586.droidpad.data.GaugeProperties
 import com.github.umer0586.droidpad.data.JoyStickEvent
 import com.github.umer0586.droidpad.data.LedEvent
 import com.github.umer0586.droidpad.data.LogEvent
+import com.github.umer0586.droidpad.data.PRESS_STATE
+import com.github.umer0586.droidpad.data.RELEASE_STATE
 import com.github.umer0586.droidpad.data.SliderEvent
 import com.github.umer0586.droidpad.data.SliderProperties
 import com.github.umer0586.droidpad.data.SteeringWheelEvent
@@ -43,6 +47,7 @@ import com.github.umer0586.droidpad.data.connection.BluetoothLEConnection
 import com.github.umer0586.droidpad.data.connection.Connection
 import com.github.umer0586.droidpad.data.connection.ConnectionFactory
 import com.github.umer0586.droidpad.data.connection.ConnectionState
+import com.github.umer0586.droidpad.data.connection.MidiConnection
 import com.github.umer0586.droidpad.data.connection.Mqttv3Connection
 import com.github.umer0586.droidpad.data.connection.Mqttv5Connection
 import com.github.umer0586.droidpad.data.connection.TCPConnection
@@ -59,6 +64,8 @@ import com.github.umer0586.droidpad.data.repositories.ControlPadSensorRepository
 import com.github.umer0586.droidpad.data.repositories.PreferenceRepository
 import com.github.umer0586.droidpad.data.sensor.SensorEventProvider
 import com.github.umer0586.droidpad.data.util.bluetooth.BluetoothUtil
+import com.github.umer0586.droidpad.data.util.midi.MidiDecoder
+import com.github.umer0586.droidpad.data.util.midi.MidiEncoder
 import com.github.umer0586.droidpad.data.util.vibrator.VibratorUtil
 import com.github.umer0586.droidpad.ui.components.DPAD_BUTTON
 import com.github.umer0586.droidpad.ui.components.LEDSTATE
@@ -131,6 +138,10 @@ class ControlPadPlayScreenViewModel @Inject constructor(
     val uiState = _uiState.asStateFlow()
 
     private var connection: Connection? = null
+    // set only for MIDI connections, where interactions travel as MIDI messages
+    // instead of JSON or CSV
+    private var midiEncoder: MidiEncoder? = null
+    private var midiDecoder: MidiDecoder? = null
     private var sendJsonOverBluetooth = false
     private var samplingRate = 200000
     private var vibrate = false
@@ -162,13 +173,7 @@ class ControlPadPlayScreenViewModel @Inject constructor(
             // we collect the sensor event flow on the IO dispatcher to avoid frequent
             // execution on the main thread, as sensor events are emitted very frequently.
             sensorEventProvider.events.flowOn(Dispatchers.IO).collect{ sensorEvent ->
-                val data = if((connection?.connectionType == ConnectionType.BLUETOOTH_LE || connection?.connectionType == ConnectionType.BLUETOOTH) && !sendJsonOverBluetooth)
-                    sensorEvent.toCsv()
-                else
-                    sensorEvent.toJson()
-
-                    connection?.sendData(data)
-
+                connection?.sendData(if (usesCsv) sensorEvent.toCsv() else sensorEvent.toJson())
             }
         }
 
@@ -212,6 +217,11 @@ class ControlPadPlayScreenViewModel @Inject constructor(
                 ?.also { connectionConfig ->
                     connection = connectionFactory.getConnection(connectionConfig, scope = viewModelScope)
 
+                    (connection as? MidiConnection)?.also { midiConnection ->
+                        midiEncoder = MidiEncoder(midiConnection.midiConfig, controlPadItems)
+                        midiDecoder = MidiDecoder(midiConnection.midiConfig, controlPadItems)
+                    }
+
                     if(connection?.connectionType == ConnectionType.UDP)
                         connection?.setup()
 
@@ -229,6 +239,7 @@ class ControlPadPlayScreenViewModel @Inject constructor(
                                 ConnectionType.MQTT_V3 -> (connection as Mqttv3Connection).mqttConfig.brokerAddress
                                 ConnectionType.BLUETOOTH_LE -> (connection as BluetoothLEConnection).bluetoothDisplayName
                                 ConnectionType.BLUETOOTH -> (connection as BluetoothConnection).bluetoothConfig.remoteDevice?.address ?: "No Device"
+                                ConnectionType.MIDI -> (connection as MidiConnection).midiConfig.address
 
                             }
                         )
@@ -259,6 +270,7 @@ class ControlPadPlayScreenViewModel @Inject constructor(
                                 ConnectionState.WEBSOCKET_CONNECTING ->true
                                 ConnectionState.MQTT_CONNECTING -> true
                                 ConnectionState.BLUETOOTH_CONNECTING -> true
+                                ConnectionState.MIDI_CONNECTING -> true
                                 else -> false
                             }
 
@@ -269,6 +281,7 @@ class ControlPadPlayScreenViewModel @Inject constructor(
                                 ConnectionState.MQTT_CONNECTED -> true
                                 ConnectionState.BLUETOOTH_CLIENT_CONNECTED -> true
                                 ConnectionState.BLUETOOTH_CONNECTED -> true
+                                ConnectionState.MIDI_CONNECTED -> true
                                 // Treat WebSocket server start as a connected state
                                 // to avoid introducing a separate state variable and additional logic
                                 ConnectionState.WEBSOCKET_SERVER_STARTED -> true
@@ -332,46 +345,19 @@ class ControlPadPlayScreenViewModel @Inject constructor(
             }
 
             is ControlPadPlayScreenEvent.OnSwitchCheckedChange -> {
-                val data = if((connection?.connectionType == ConnectionType.BLUETOOTH_LE || connection?.connectionType == ConnectionType.BLUETOOTH) && !sendJsonOverBluetooth)
-                    SwitchEvent(id = event.id, state = event.checked).toCSV()
-                else
-                    SwitchEvent(id = event.id, state = event.checked).toJson()
-
                 uiState.value.switchStates[event.idLong] = event.checked
-
                 vibrate()
-                viewModelScope.launch {
-                    connection?.sendData(data)
-                }
-
+                send(SwitchEvent(id = event.id, state = event.checked))
             }
 
-
             is ControlPadPlayScreenEvent.OnSliderValueChange -> {
-
-                val data = if((connection?.connectionType == ConnectionType.BLUETOOTH_LE || connection?.connectionType == ConnectionType.BLUETOOTH) && !sendJsonOverBluetooth)
-                    SliderEvent(id = event.id, value = event.value).toCSV()
-                else
-                    SliderEvent(id = event.id, value = event.value).toJson()
-
                 uiState.value.sliderStates[event.idLong] = event.value
-
-                viewModelScope.launch {
-                    connection?.sendData(data)
-                }
+                send(SliderEvent(id = event.id, value = event.value))
             }
 
             is ControlPadPlayScreenEvent.OnButtonClick -> {
-
-                val data = if((connection?.connectionType == ConnectionType.BLUETOOTH_LE || connection?.connectionType == ConnectionType.BLUETOOTH) && !sendJsonOverBluetooth)
-                    ButtonEvent(id = event.id, state = "CLICK").toCSV()
-                else
-                    ButtonEvent(id = event.id, state = "CLICK").toJson()
-
                 vibrate()
-                viewModelScope.launch {
-                    connection?.sendData(data)
-                }
+                send(ButtonEvent(id = event.id, state = CLICK_STATE))
             }
 
             is ControlPadPlayScreenEvent.OnBackPress -> {
@@ -382,89 +368,55 @@ class ControlPadPlayScreenViewModel @Inject constructor(
             }
 
             is ControlPadPlayScreenEvent.OnButtonPress -> {
-
-                val data = if((connection?.connectionType == ConnectionType.BLUETOOTH_LE || connection?.connectionType == ConnectionType.BLUETOOTH) && !sendJsonOverBluetooth)
-                    ButtonEvent(id = event.id, state = "PRESS").toCSV()
-                else
-                    ButtonEvent(id = event.id, state = "PRESS").toJson()
-
                 vibrate()
-                viewModelScope.launch {
-                    connection?.sendData(data)
-                }
+                send(ButtonEvent(id = event.id, state = PRESS_STATE))
             }
-            is ControlPadPlayScreenEvent.OnButtonRelease -> {
-                val data = if((connection?.connectionType == ConnectionType.BLUETOOTH_LE || connection?.connectionType == ConnectionType.BLUETOOTH) && !sendJsonOverBluetooth)
-                    ButtonEvent(id = event.id, state = "RELEASE").toCSV()
-                else
-                    ButtonEvent(id = event.id, state = "RELEASE").toJson()
 
+            is ControlPadPlayScreenEvent.OnButtonRelease -> {
                 vibrate()
-                viewModelScope.launch {
-                    connection?.sendData(data)
-                }
+                send(ButtonEvent(id = event.id, state = RELEASE_STATE))
             }
 
             is ControlPadPlayScreenEvent.OnDpadButtonClick -> {
-
-                val data = if((connection?.connectionType == ConnectionType.BLUETOOTH_LE || connection?.connectionType == ConnectionType.BLUETOOTH) && !sendJsonOverBluetooth)
-                    DPadEvent(id = event.id, button = event.dPadButton, state = "CLICK").toCSV()
-                else
-                    DPadEvent(id = event.id, button = event.dPadButton, state = "CLICK").toJson()
-
                 vibrate()
-                viewModelScope.launch {
-                    connection?.sendData(data)
-                }
+                send(DPadEvent(id = event.id, button = event.dPadButton, state = CLICK_STATE))
             }
+
             is ControlPadPlayScreenEvent.OnDpadButtonPress -> {
-
-                val data = if((connection?.connectionType == ConnectionType.BLUETOOTH_LE || connection?.connectionType == ConnectionType.BLUETOOTH) && !sendJsonOverBluetooth)
-                    DPadEvent(id = event.id, button = event.dPadButton, state = "PRESS").toCSV()
-                else
-                    DPadEvent(id = event.id, button = event.dPadButton, state = "PRESS").toJson()
-
-
                 vibrate()
-                viewModelScope.launch {
-                    connection?.sendData(data)
-                }
+                send(DPadEvent(id = event.id, button = event.dPadButton, state = PRESS_STATE))
             }
+
             is ControlPadPlayScreenEvent.OnDpadButtonRelease -> {
-
-                val data = if((connection?.connectionType == ConnectionType.BLUETOOTH_LE || connection?.connectionType == ConnectionType.BLUETOOTH) && !sendJsonOverBluetooth)
-                    DPadEvent(id = event.id, button = event.dPadButton, state = "RELEASE").toCSV()
-                else
-                    DPadEvent(id = event.id, button = event.dPadButton, state = "RELEASE").toJson()
-
                 vibrate()
-                viewModelScope.launch {
-                    connection?.sendData(data)
-                }
+                send(DPadEvent(id = event.id, button = event.dPadButton, state = RELEASE_STATE))
             }
 
             is ControlPadPlayScreenEvent.OnJoyStickMove -> {
-                val data = if((connection?.connectionType == ConnectionType.BLUETOOTH_LE || connection?.connectionType == ConnectionType.BLUETOOTH) && !sendJsonOverBluetooth)
-                    JoyStickEvent(id = event.id, x = event.x, y = event.y).toCSV()
-                else
-                    JoyStickEvent(id = event.id, x = event.x, y = event.y).toJson()
-
-                viewModelScope.launch {
-                    connection?.sendData(data)
-                }
+                send(JoyStickEvent(id = event.id, x = event.x, y = event.y))
             }
 
             is ControlPadPlayScreenEvent.OnSteeringWheelRotate -> {
-                val data = if((connection?.connectionType == ConnectionType.BLUETOOTH_LE || connection?.connectionType == ConnectionType.BLUETOOTH) && !sendJsonOverBluetooth)
-                    SteeringWheelEvent(id = event.id, angle = event.angle).toCSV()
-                else
-                    SteeringWheelEvent(id = event.id, angle = event.angle).toJson()
-
-                viewModelScope.launch {
-                    connection?.sendData(data)
-                }
-
+                send(SteeringWheelEvent(id = event.id, angle = event.angle))
             }
+        }
+    }
+
+    // Bluetooth peers parse CSV unless the user opted into JSON, every other
+    // text based connection always gets JSON
+    private val usesCsv
+        get() = (connection?.connectionType == ConnectionType.BLUETOOTH_LE || connection?.connectionType == ConnectionType.BLUETOOTH)
+                && !sendJsonOverBluetooth
+
+    private fun send(event: ControlPadEvent) {
+        val connection = connection ?: return
+        val midiEncoder = midiEncoder
+
+        viewModelScope.launch {
+            if (midiEncoder != null)
+                midiEncoder.encode(event).forEach { connection.sendData(it) }
+            else
+                connection.sendData(if (usesCsv) event.toCsv() else event.toJson())
         }
     }
 
@@ -489,70 +441,82 @@ class ControlPadPlayScreenViewModel @Inject constructor(
     private fun handleIncomingData(controlPad: ControlPad, controlPadItems: List<ControlPadItem>){
         viewModelScope.launch {
             connection?.receivedData?.collect{ jsonString ->
-
-                val jsonElement = try {
-                    Json.parseToJsonElement(jsonString)
-                }catch (e: Exception){
-                    e.printStackTrace()
-                    return@collect
-                }
-
-                if(jsonElement is JsonObject){
-
-                    try {
-
-                        if ("type" in jsonElement.keys && jsonElement["type"]?.jsonPrimitive?.content == "SWITCH") {
-                            val switchEvent = SwitchEvent.fromJson(jsonString)
-                            controlPadItems.filter { it.itemType == ItemType.SWITCH }
-                                .find { switchItem ->
-                                    switchItem.itemIdentifier == switchEvent.id
-                                }?.also { switchItem ->
-                                    uiState.value.switchStates[switchItem.id] = switchEvent.state
-                                }
-                        }
-                        else if ("type" in jsonElement.keys && jsonElement["type"]?.jsonPrimitive?.content == "SLIDER") {
-                            val sliderEvent = SliderEvent.fromJson(jsonString)
-                            controlPadItems.filter { it.itemType == ItemType.SLIDER }
-                                .find { sliderItem ->
-                                    sliderItem.itemIdentifier == sliderEvent.id
-                                }?.also { sliderItem ->
-                                    val sliderProperties = SliderProperties.fromJson(sliderItem.properties)
-                                    uiState.value.sliderStates[sliderItem.id] = sliderEvent.value.coerceIn(sliderProperties.minValue, sliderProperties.maxValue)
-                                }
-                        }
-                        else if("type" in jsonElement.keys && jsonElement["type"]?.jsonPrimitive?.content == "LED"){
-                            val ledEvent = LedEvent.fromJson(jsonString)
-                            controlPadItems.filter { it.itemType == ItemType.LED }
-                                .find { ledItem ->
-                                    ledItem.itemIdentifier == ledEvent.id
-                                }?.also { ledItem ->
-                                    uiState.value.ledStates[ledItem.id] = ledEvent.state
-                                }
-                        }
-                        else if(controlPad.logging && "type" in jsonElement.keys && jsonElement["type"]?.jsonPrimitive?.content == "LOG"){
-
-                            val timestamp = SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(Date())
-                            val logEvent = LogEvent.fromJson(jsonString).copy(timestamp = timestamp)
-
-                            uiState.value.logState.add(logEvent)
-                        }
-                        else if("type" in jsonElement.keys && jsonElement["type"]?.jsonPrimitive?.content == "GAUGE"){
-                            val gaugeEvent = GaugeEvent.fromJson(jsonString)
-                            controlPadItems.filter { it.itemType == ItemType.GAUGE }
-                                .find { gaugeItem ->
-                                    gaugeItem.itemIdentifier == gaugeEvent.id
-                                }?.also { gaugeItem ->
-                                    uiState.value.gaugeStates[gaugeItem.id] = gaugeEvent.value
-                                }
-                        }
-
-
-                    } catch (e: Exception) {
-                        e.printStackTrace()
-                    }
-                }
-
+                applyIncomingJson(jsonString, controlPad, controlPadItems)
             }
+        }
+
+        // MIDI arrives as bytes, which the decoder turns into the same messages
+        // a script would have sent, so both paths end up in the same handler
+        viewModelScope.launch {
+            connection?.receivedBytes?.collect { message ->
+                midiDecoder?.decode(message)?.forEach {
+                    applyIncomingJson(it, controlPad, controlPadItems)
+                }
+            }
+        }
+    }
+
+    private fun applyIncomingJson(jsonString: String, controlPad: ControlPad, controlPadItems: List<ControlPadItem>){
+
+        val jsonElement = try {
+            Json.parseToJsonElement(jsonString)
+        }catch (e: Exception){
+            e.printStackTrace()
+            return
+        }
+
+        if(jsonElement !is JsonObject)
+            return
+
+        try {
+
+            if ("type" in jsonElement.keys && jsonElement["type"]?.jsonPrimitive?.content == "SWITCH") {
+                val switchEvent = SwitchEvent.fromJson(jsonString)
+                controlPadItems.filter { it.itemType == ItemType.SWITCH }
+                    .find { switchItem ->
+                        switchItem.itemIdentifier == switchEvent.id
+                    }?.also { switchItem ->
+                        uiState.value.switchStates[switchItem.id] = switchEvent.state
+                    }
+            }
+            else if ("type" in jsonElement.keys && jsonElement["type"]?.jsonPrimitive?.content == "SLIDER") {
+                val sliderEvent = SliderEvent.fromJson(jsonString)
+                controlPadItems.filter { it.itemType == ItemType.SLIDER }
+                    .find { sliderItem ->
+                        sliderItem.itemIdentifier == sliderEvent.id
+                    }?.also { sliderItem ->
+                        val sliderProperties = SliderProperties.fromJson(sliderItem.properties)
+                        uiState.value.sliderStates[sliderItem.id] = sliderEvent.value.coerceIn(sliderProperties.minValue, sliderProperties.maxValue)
+                    }
+            }
+            else if("type" in jsonElement.keys && jsonElement["type"]?.jsonPrimitive?.content == "LED"){
+                val ledEvent = LedEvent.fromJson(jsonString)
+                controlPadItems.filter { it.itemType == ItemType.LED }
+                    .find { ledItem ->
+                        ledItem.itemIdentifier == ledEvent.id
+                    }?.also { ledItem ->
+                        uiState.value.ledStates[ledItem.id] = ledEvent.state
+                    }
+            }
+            else if(controlPad.logging && "type" in jsonElement.keys && jsonElement["type"]?.jsonPrimitive?.content == "LOG"){
+
+                val timestamp = SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(Date())
+                val logEvent = LogEvent.fromJson(jsonString).copy(timestamp = timestamp)
+
+                uiState.value.logState.add(logEvent)
+            }
+            else if("type" in jsonElement.keys && jsonElement["type"]?.jsonPrimitive?.content == "GAUGE"){
+                val gaugeEvent = GaugeEvent.fromJson(jsonString)
+                controlPadItems.filter { it.itemType == ItemType.GAUGE }
+                    .find { gaugeItem ->
+                        gaugeItem.itemIdentifier == gaugeEvent.id
+                    }?.also { gaugeItem ->
+                        uiState.value.gaugeStates[gaugeItem.id] = gaugeEvent.value
+                    }
+            }
+
+        } catch (e: Exception) {
+            e.printStackTrace()
         }
     }
 
